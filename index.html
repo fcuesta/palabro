@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Palabro — Sliding Word Puzzle</title>
+<style>
+  :root {
+    --bg-0: #05060d;
+    --bg-1: #0f1222;
+    --surface: rgba(255, 255, 255, 0.04);
+    --stroke: rgba(255, 255, 255, 0.08);
+    --text: #f8fafc;
+    --muted: #94a3b8;
+    --accent: #f4c96b;       /* warm gold */
+    --accent-2: #f59e0b;
+    --accent-glow: rgba(244, 201, 107, 0.45);
+    --neon-a: #8b5cf6;       /* violet */
+    --neon-b: #22d3ee;       /* cyan */
+    --green: #22c55e;
+    --green-2: #16a34a;
+    --yellow: #eab308;
+    --yellow-2: #ca8a04;
+    --danger: #f87171;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    background:
+      radial-gradient(1200px 800px at 15% -10%, rgba(139, 92, 246, 0.22), transparent 60%),
+      radial-gradient(1000px 700px at 110% 110%, rgba(34, 211, 238, 0.18), transparent 55%),
+      linear-gradient(180deg, var(--bg-1) 0%, var(--bg-0) 100%);
+    color: var(--text);
+    min-height: 100vh;
+    min-height: 100dvh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: max(12px, env(safe-area-inset-top))
+            max(12px, env(safe-area-inset-right))
+            max(12px, env(safe-area-inset-bottom))
+            max(12px, env(safe-area-inset-left));
+    overflow: hidden;
+    overscroll-behavior: none;
+    -webkit-font-smoothing: antialiased;
+  }
+  .app {
+    max-width: 1000px;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+  }
+  h1 {
+    font-size: clamp(1.8rem, 4vw, 2.6rem);
+    font-weight: 900;
+    letter-spacing: 0.32em;
+    background: linear-gradient(135deg, var(--neon-a) 0%, var(--accent) 50%, var(--neon-b) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    filter: drop-shadow(0 2px 12px rgba(139, 92, 246, 0.35));
+    margin: 0;
+  }
+  .status {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+    gap: 12px;
+  }
+  .timer {
+    font-size: clamp(1.4rem, 2.6vw, 2rem);
+    font-family: 'SF Mono', ui-monospace, 'JetBrains Mono', Menlo, monospace;
+    font-weight: 700;
+    color: var(--text);
+    background: var(--surface);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    padding: 8px 20px;
+    border-radius: 14px;
+    border: 1px solid var(--stroke);
+    min-width: 130px;
+    letter-spacing: 0.06em;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  }
+  .timer.warning { color: var(--accent); border-color: rgba(244, 201, 107, 0.4); }
+  .timer.danger {
+    color: var(--danger);
+    border-color: rgba(248, 113, 113, 0.5);
+    animation: pulse 1s infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+  .btn {
+    background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
+    color: #241a05;
+    border: none;
+    padding: 10px 22px;
+    font-size: 1rem;
+    font-weight: 700;
+    font-family: inherit;
+    border-radius: 14px;
+    cursor: pointer;
+    letter-spacing: 0.04em;
+    box-shadow:
+      0 8px 22px rgba(244, 201, 107, 0.32),
+      inset 0 1px 0 rgba(255, 255, 255, 0.45);
+    transition: transform 0.12s ease, box-shadow 0.15s ease, filter 0.12s ease;
+  }
+  .btn:hover {
+    filter: brightness(1.08);
+    box-shadow: 0 10px 28px rgba(244, 201, 107, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  }
+  .btn:active { transform: translateY(1px) scale(0.98); }
+
+  .board {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    grid-template-rows: repeat(3, 1fr);
+    gap: 10px;
+    padding: 18px;
+    background:
+      linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01)),
+      rgba(12, 16, 32, 0.65);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border: 1px solid var(--stroke);
+    border-radius: 22px;
+    box-shadow:
+      0 30px 60px rgba(0, 0, 0, 0.55),
+      inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    aspect-ratio: 7 / 3;
+    margin: 0 auto;
+    width: min(100%, calc((100vh - 180px) * 7 / 3), 1000px);
+    width: min(100%, calc((100dvh - 180px) * 7 / 3), 1000px);
+    touch-action: none;
+    position: relative;
+  }
+
+  /* Single bounding box around the 5 central cells — spans them as a grid item
+     behind the cells. Negative margin extends it into the gap around the group
+     so it visually hugs the 5 cells as a single frame. */
+  .central-frame {
+    grid-column: 2 / 7;
+    grid-row: 2 / 3;
+    margin: -7px;
+    border-radius: 18px;
+    border: 1.5px solid rgba(244, 201, 107, 0.8);
+    background:
+      linear-gradient(135deg, rgba(244, 201, 107, 0.12), rgba(139, 92, 246, 0.08));
+    box-shadow:
+      0 0 0 1px rgba(244, 201, 107, 0.15),
+      0 0 38px var(--accent-glow),
+      inset 0 0 32px rgba(244, 201, 107, 0.10);
+    pointer-events: none;
+    position: relative;
+    z-index: 0;
+    animation: frameGlow 3.4s ease-in-out infinite;
+  }
+  @keyframes frameGlow {
+    0%, 100% {
+      box-shadow:
+        0 0 0 1px rgba(244, 201, 107, 0.18),
+        0 0 28px rgba(244, 201, 107, 0.32),
+        inset 0 0 24px rgba(244, 201, 107, 0.08);
+    }
+    50% {
+      box-shadow:
+        0 0 0 1px rgba(244, 201, 107, 0.32),
+        0 0 52px rgba(244, 201, 107, 0.55),
+        inset 0 0 36px rgba(244, 201, 107, 0.16);
+    }
+  }
+
+  .cell {
+    position: relative;
+    aspect-ratio: 1;
+    border-radius: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: clamp(1.9rem, 7vw, 3.8rem);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    user-select: none;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease, background 0.2s ease;
+    touch-action: none;
+    z-index: 1;
+    color: var(--text);
+  }
+  .cell.piece {
+    background: linear-gradient(155deg, #2a2f4a 0%, #161a2e 100%);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.08),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.4),
+      0 4px 10px rgba(0, 0, 0, 0.45);
+    cursor: pointer;
+  }
+  .cell.piece:hover {
+    transform: translateY(-2px);
+    filter: brightness(1.12);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.12),
+      0 10px 22px rgba(0, 0, 0, 0.55),
+      0 0 24px rgba(34, 211, 238, 0.28);
+  }
+  .cell.empty {
+    background:
+      radial-gradient(ellipse at center, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0.2) 70%);
+    box-shadow: inset 0 4px 14px rgba(0, 0, 0, 0.7);
+  }
+  /* Central cells sit inside the frame — subtle accent so they read as "inside". */
+  .cell.central.piece:not(.green):not(.yellow) {
+    background: linear-gradient(155deg, #32385a 0%, #1a1f38 100%);
+  }
+  .cell.central.empty {
+    background:
+      radial-gradient(ellipse at center, rgba(0,0,0,0.6) 0%, rgba(20, 10, 40, 0.25) 70%);
+    box-shadow: inset 0 4px 14px rgba(0, 0, 0, 0.7);
+  }
+  .cell.green {
+    background: linear-gradient(155deg, var(--green) 0%, var(--green-2) 100%);
+    color: #052e10;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.25),
+      0 6px 16px rgba(34, 197, 94, 0.38),
+      0 0 22px rgba(34, 197, 94, 0.32);
+  }
+  .cell.yellow {
+    background: linear-gradient(155deg, var(--yellow) 0%, var(--yellow-2) 100%);
+    color: #2a1d04;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.25),
+      0 6px 16px rgba(234, 179, 8, 0.38),
+      0 0 22px rgba(234, 179, 8, 0.32);
+  }
+  .cell.win-anim {
+    animation: winBounce 0.75s ease;
+  }
+  @keyframes winBounce {
+    0%, 100% { transform: translateY(0) rotate(0) scale(1); }
+    20% { transform: translateY(-22px) rotate(-6deg) scale(1.1); }
+    45% { transform: translateY(-28px) rotate(7deg) scale(1.18); }
+    70% { transform: translateY(-12px) rotate(-3deg) scale(1.06); }
+  }
+  .overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(2, 4, 10, 0.7);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+  }
+  .overlay.show { display: flex; }
+  .modal {
+    background:
+      linear-gradient(135deg, rgba(40, 30, 70, 0.85), rgba(12, 14, 28, 0.9));
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(244, 201, 107, 0.25);
+    border-radius: 24px;
+    padding: 36px 44px;
+    text-align: center;
+    box-shadow:
+      0 30px 80px rgba(0, 0, 0, 0.6),
+      0 0 50px rgba(244, 201, 107, 0.18);
+    max-width: 92%;
+  }
+  .modal h2 {
+    font-size: clamp(1.8rem, 4vw, 2.4rem);
+    font-weight: 900;
+    background: linear-gradient(135deg, var(--neon-a), var(--accent), var(--neon-b));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    margin-bottom: 10px;
+    letter-spacing: 0.06em;
+  }
+  .modal p { font-size: 1rem; margin-bottom: 10px; color: var(--muted); }
+  .modal .word {
+    font-size: clamp(2rem, 5vw, 2.8rem);
+    letter-spacing: 0.32em;
+    font-weight: 900;
+    background: linear-gradient(135deg, var(--green), #86efac);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    margin: 18px 0 26px;
+  }
+  .modal .word.lost {
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .confetti {
+    position: fixed;
+    top: -20px;
+    width: 10px;
+    height: 14px;
+    pointer-events: none;
+    z-index: 99;
+    animation: fall linear forwards;
+    border-radius: 2px;
+  }
+  @keyframes fall {
+    to { transform: translateY(110vh) rotate(720deg); opacity: 0; }
+  }
+
+  @media (max-width: 520px) {
+    h1 { font-size: 1.5rem; letter-spacing: 0.22em; }
+    .timer { font-size: 1.25rem; min-width: 104px; padding: 6px 14px; }
+    .btn { padding: 8px 16px; font-size: 0.9rem; }
+    .board { padding: 12px; gap: 7px; border-radius: 16px; }
+    .cell { border-radius: 10px; }
+    .central-frame { margin: -5px; border-radius: 14px; }
+  }
+  /* Mobile landscape — hide title, compact chrome, let the board fill. */
+  @media (max-height: 500px) {
+    body { padding: 6px; }
+    .app { gap: 8px; }
+    h1 { display: none; }
+    .timer { font-size: 1.2rem; min-width: 98px; padding: 5px 14px; border-radius: 12px; }
+    .btn { padding: 6px 16px; font-size: 0.9rem; border-radius: 12px; }
+    .board {
+      padding: 10px; gap: 6px; border-radius: 14px;
+      width: min(100%, calc((100vh - 70px) * 7 / 3));
+      width: min(100%, calc((100dvh - 70px) * 7 / 3));
+    }
+    .cell { border-radius: 9px; font-size: clamp(1.6rem, 11vh, 3rem); }
+    .central-frame { margin: -4px; border-radius: 12px; }
+  }
+  @media (max-height: 400px) {
+    .modal { padding: 18px 26px; border-radius: 18px; }
+    .modal h2 { font-size: 1.4rem; margin-bottom: 6px; }
+    .modal p { font-size: 0.9rem; margin-bottom: 6px; }
+    .modal .word { font-size: 1.6rem; margin: 8px 0 14px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>PALABRO</h1>
+  <div class="status">
+    <div class="timer" id="timer">3:00</div>
+    <button class="btn" id="newGameBtn">New Game</button>
+  </div>
+  <div class="board" id="board"></div>
+</div>
+<div class="overlay" id="overlay">
+  <div class="modal" id="modal"></div>
+</div>
+<script>
+  const WORDS = [
+    "APPLE","BEACH","BREAD","BRICK","BRUSH","CHAIR","CHARM","CHEER","CHESS","CHIEF",
+    "CHILD","CLOUD","COAST","CRAFT","CRANE","CREAM","CRISP","CROWN","DANCE","DREAM",
+    "DRINK","DRESS","DRIVE","EAGLE","EARTH","EIGHT","ELBOW","ENEMY","ENTRY","EQUAL",
+    "EVENT","FAITH","FENCE","FIELD","FIGHT","FINAL","FIRST","FLAME","FLASH","FLEET",
+    "FLOOR","FLOUR","FOCUS","FRESH","FRUIT","GIANT","GLASS","GLOBE","GRACE","GRAIN",
+    "GRAND","GRAPE","GRASS","GREAT","GREEN","GUEST","HABIT","HEART","HEAVY","HONEY",
+    "HONOR","HORSE","HOUSE","IDEAL","IMAGE","JUDGE","KNIFE","LEMON","LIGHT","LUNCH",
+    "MAGIC","MAPLE","METAL","MONEY","MONTH","MOUSE","MUSIC","NIGHT","NOBLE","NORTH",
+    "NOVEL","OCEAN","PAPER","PEACE","PLANT","PLATE","POINT","POWER","PROUD","QUICK",
+    "RIVER","ROAST","ROBOT","ROUGH","ROUND","SALAD","SHAPE","SHARP","SHEET","SHIRT"
+  ];
+
+  // English letter frequency weights (percent * 10, rounded)
+  const LETTER_WEIGHTS = {
+    A:82,B:15,C:28,D:43,E:127,F:22,G:20,H:61,I:70,J:2,
+    K:8,L:40,M:24,N:67,O:75,P:19,Q:1,R:60,S:63,T:91,
+    U:28,V:10,W:24,X:2,Y:20,Z:1
+  };
+  const LETTER_ENTRIES = Object.entries(LETTER_WEIGHTS);
+  const LETTER_TOTAL = LETTER_ENTRIES.reduce((a, [,w]) => a + w, 0);
+  function weightedLetter() {
+    let r = Math.random() * LETTER_TOTAL;
+    for (const [L, w] of LETTER_ENTRIES) {
+      r -= w;
+      if (r < 0) return L;
+    }
+    return 'E';
+  }
+
+  const ROWS = 3, COLS = 7;
+  const CENTER_ROW = 1, CENTER_COL_START = 1, CENTER_COL_END = 5;
+  const TOTAL_CELLS = ROWS * COLS;
+  const TIME_LIMIT = 180;
+
+  const boardEl    = document.getElementById('board');
+  const timerEl    = document.getElementById('timer');
+  const overlayEl  = document.getElementById('overlay');
+  const modalEl    = document.getElementById('modal');
+  const newGameBtn = document.getElementById('newGameBtn');
+
+  let state = null;
+  let timerInterval = null;
+
+  function shuffle(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  }
+  const rcToIdx = (r, c) => r * COLS + c;
+  const idxToRC = (i) => ({ row: Math.floor(i / COLS), col: i % COLS });
+  const isCentral = (row, col) =>
+    row === CENTER_ROW && col >= CENTER_COL_START && col <= CENTER_COL_END;
+
+  function buildBoard(target) {
+    const cells = new Array(TOTAL_CELLS).fill(null);
+    const emptyIdx = Math.floor(Math.random() * TOTAL_CELLS);
+    const available = [];
+    for (let i = 0; i < TOTAL_CELLS; i++) if (i !== emptyIdx) available.push(i);
+    shuffle(available);
+    for (let i = 0; i < 5; i++) cells[available[i]] = target[i];
+    for (let i = 5; i < available.length; i++) cells[available[i]] = weightedLetter();
+    return { cells, emptyIdx };
+  }
+
+  function isSolved(cells, target) {
+    for (let c = CENTER_COL_START; c <= CENTER_COL_END; c++) {
+      if (cells[rcToIdx(CENTER_ROW, c)] !== target[c - CENTER_COL_START]) return false;
+    }
+    return true;
+  }
+
+  function newGame() {
+    const target = WORDS[Math.floor(Math.random() * WORDS.length)];
+    let setup = buildBoard(target);
+    // Extremely unlikely, but avoid starting in the solved state
+    while (isSolved(setup.cells, target)) setup = buildBoard(target);
+    state = {
+      target,
+      cells: setup.cells,
+      emptyIdx: setup.emptyIdx,
+      remaining: TIME_LIMIT,
+      ended: false,
+    };
+    hideOverlay();
+    render();
+    startTimer();
+  }
+
+  // Wordle-style mark-once coloring: green consumes first, then yellow against the
+  // remaining pool, so duplicate guess letters can't all light up against a single
+  // target letter.
+  function computeCentralColors(guess, target) {
+    const result = new Array(5).fill(null);
+    const consumed = new Array(5).fill(false);
+    for (let i = 0; i < 5; i++) {
+      if (guess[i] != null && guess[i] === target[i]) {
+        result[i] = 'green';
+        consumed[i] = true;
+      }
+    }
+    for (let i = 0; i < 5; i++) {
+      if (result[i] || guess[i] == null) continue;
+      for (let j = 0; j < 5; j++) {
+        if (!consumed[j] && target[j] === guess[i]) {
+          result[i] = 'yellow';
+          consumed[j] = true;
+          break;
+        }
+      }
+    }
+    return result;
+  }
+
+  function render() {
+    boardEl.innerHTML = '';
+    // Single bounding frame around the 5 central cells (positioned via grid-area).
+    const frame = document.createElement('div');
+    frame.className = 'central-frame';
+    boardEl.appendChild(frame);
+
+    const guess = [];
+    for (let c = CENTER_COL_START; c <= CENTER_COL_END; c++) {
+      guess.push(state.cells[rcToIdx(CENTER_ROW, c)]);
+    }
+    const colors = computeCentralColors(guess, state.target);
+    for (let i = 0; i < TOTAL_CELLS; i++) {
+      const { row, col } = idxToRC(i);
+      const el = document.createElement('div');
+      el.className = 'cell';
+      el.dataset.idx = i;
+      const central = isCentral(row, col);
+      if (central) el.classList.add('central');
+      if (state.cells[i] === null) {
+        el.classList.add('empty');
+      } else {
+        el.classList.add('piece');
+        el.textContent = state.cells[i];
+        if (central) {
+          const color = colors[col - CENTER_COL_START];
+          if (color) el.classList.add(color);
+        }
+        attachDragHandlers(el);
+      }
+      boardEl.appendChild(el);
+    }
+  }
+
+  function attachDragHandlers(el) {
+    let startX = 0, startY = 0, pointerId = null, moved = false;
+    el.addEventListener('pointerdown', (e) => {
+      if (state.ended) return;
+      pointerId = e.pointerId;
+      startX = e.clientX;
+      startY = e.clientY;
+      moved = false;
+      el.setPointerCapture(pointerId);
+    });
+    el.addEventListener('pointermove', (e) => {
+      if (pointerId === null) return;
+      const dx = e.clientX - startX, dy = e.clientY - startY;
+      if (Math.hypot(dx, dy) > 8) moved = true;
+      // Slight visual follow, clamped
+      const max = 30;
+      const tx = Math.max(-max, Math.min(max, dx));
+      const ty = Math.max(-max, Math.min(max, dy));
+      el.style.transform = `translate(${tx}px, ${ty}px)`;
+    });
+    const finish = (e) => {
+      if (pointerId === null) return;
+      el.style.transform = '';
+      try { el.releasePointerCapture(pointerId); } catch {}
+      pointerId = null;
+      const idx = parseInt(el.dataset.idx, 10);
+      trySlide(idx);
+    };
+    el.addEventListener('pointerup', finish);
+    el.addEventListener('pointercancel', finish);
+  }
+
+  function trySlide(idx) {
+    if (state.ended) return;
+    if (idx === state.emptyIdx) return;
+    const { row: sr, col: sc } = idxToRC(idx);
+    const { row: er, col: ec } = idxToRC(state.emptyIdx);
+    if (sr !== er && sc !== ec) return;
+
+    if (sr === er) {
+      const step = ec > sc ? 1 : -1;
+      for (let c = ec; c !== sc; c -= step) {
+        state.cells[rcToIdx(sr, c)] = state.cells[rcToIdx(sr, c - step)];
+      }
+    } else {
+      const step = er > sr ? 1 : -1;
+      for (let r = er; r !== sr; r -= step) {
+        state.cells[rcToIdx(r, sc)] = state.cells[rcToIdx(r - step, sc)];
+      }
+    }
+    state.cells[idx] = null;
+    state.emptyIdx = idx;
+    render();
+    if (isSolved(state.cells, state.target)) winGame();
+  }
+
+  function startTimer() {
+    clearInterval(timerInterval);
+    updateTimerDisplay();
+    timerInterval = setInterval(() => {
+      state.remaining--;
+      updateTimerDisplay();
+      if (state.remaining <= 0) {
+        clearInterval(timerInterval);
+        loseGame();
+      }
+    }, 1000);
+  }
+
+  function updateTimerDisplay() {
+    const s = Math.max(0, state.remaining);
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    timerEl.textContent = `${m}:${String(sec).padStart(2, '0')}`;
+    timerEl.classList.toggle('warning', s <= 60 && s > 30);
+    timerEl.classList.toggle('danger', s <= 30);
+  }
+
+  function winGame() {
+    state.ended = true;
+    clearInterval(timerInterval);
+    const centralCells = boardEl.querySelectorAll('.cell.central');
+    centralCells.forEach((el, i) => {
+      setTimeout(() => el.classList.add('win-anim'), i * 110);
+    });
+    launchConfetti();
+    setTimeout(showWinModal, 1400);
+  }
+
+  function loseGame() {
+    state.ended = true;
+    // Reveal the word in the central panel
+    for (let c = CENTER_COL_START; c <= CENTER_COL_END; c++) {
+      state.cells[rcToIdx(CENTER_ROW, c)] = state.target[c - CENTER_COL_START];
+    }
+    // If the empty slot was in the central panel, we just overwrote it.
+    // Maintain the one-empty invariant by relocating empty to a random non-central cell.
+    const { row: er, col: ec } = idxToRC(state.emptyIdx);
+    if (isCentral(er, ec)) {
+      const nonCentral = [];
+      for (let i = 0; i < TOTAL_CELLS; i++) {
+        const { row, col } = idxToRC(i);
+        if (!isCentral(row, col)) nonCentral.push(i);
+      }
+      const newEmpty = nonCentral[Math.floor(Math.random() * nonCentral.length)];
+      state.emptyIdx = newEmpty;
+      state.cells[newEmpty] = null;
+    }
+    render();
+    setTimeout(showLoseModal, 400);
+  }
+
+  function showWinModal() {
+    const used = TIME_LIMIT - state.remaining;
+    const m = Math.floor(used / 60);
+    const s = used % 60;
+    modalEl.innerHTML = `
+      <h2>Victory!</h2>
+      <div class="word">${state.target}</div>
+      <p>Solved in ${m}:${String(s).padStart(2, '0')}</p>
+      <button class="btn" id="playAgain">Play Again</button>
+    `;
+    overlayEl.classList.add('show');
+    document.getElementById('playAgain').addEventListener('click', newGame);
+  }
+
+  function showLoseModal() {
+    modalEl.innerHTML = `
+      <h2>Time's Up!</h2>
+      <p>The word was</p>
+      <div class="word lost">${state.target}</div>
+      <button class="btn" id="playAgain">Play Again</button>
+    `;
+    overlayEl.classList.add('show');
+    document.getElementById('playAgain').addEventListener('click', newGame);
+  }
+
+  function hideOverlay() { overlayEl.classList.remove('show'); }
+
+  function launchConfetti() {
+    const colors = ['#ff4c4c','#ff8a4c','#e8c888','#6ab04c','#4cb0e8','#b04ce8','#f4e4c1'];
+    for (let i = 0; i < 90; i++) {
+      const c = document.createElement('div');
+      c.className = 'confetti';
+      c.style.left = Math.random() * 100 + 'vw';
+      c.style.background = colors[Math.floor(Math.random() * colors.length)];
+      c.style.animationDelay = (Math.random() * 0.6) + 's';
+      c.style.animationDuration = (2 + Math.random() * 2.2) + 's';
+      c.style.transform = `rotate(${Math.random() * 360}deg)`;
+      document.body.appendChild(c);
+      setTimeout(() => c.remove(), 5500);
+    }
+  }
+
+  newGameBtn.addEventListener('click', newGame);
+  newGame();
+</script>
+</body>
+</html>
