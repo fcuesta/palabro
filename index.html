@@ -489,6 +489,9 @@
       const el = document.createElement('div');
       el.className = 'cell';
       el.dataset.idx = i;
+      // Place explicitly so cells can overlap the .central-frame grid area.
+      el.style.gridColumn = (col + 1);
+      el.style.gridRow = (row + 1);
       const central = isCentral(row, col);
       if (central) el.classList.add('central');
       if (state.cells[i] === null) {
