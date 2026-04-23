@@ -166,6 +166,10 @@
     width: min(100%, calc((100dvh - 180px) * 7 / 3), 1000px);
     touch-action: none;
     position: relative;
+    /* Hide pieces that momentarily slide past the edge while wrapping around —
+       they reappear on the opposite side the instant the drag crosses the
+       wrap threshold (see wrapMod() in the drag preview). */
+    overflow: hidden;
   }
 
   /* Single bounding box around the 5 central cells — spans them as a grid item
@@ -442,9 +446,10 @@
   let timerInterval = null;
   // Live DOM references — kept stable across slides so animations can flip
   // from old position to new without rebuilding the elements.
-  let pieceEls   = new Array(TOTAL_CELLS).fill(null);
-  let emptySlotEl = null;
-  let frameEl     = null;
+  let pieceEls = new Array(TOTAL_CELLS).fill(null);
+  let frameEl  = null;
+  // Global drag guard: reject secondary pointers while one drag is active.
+  let activePointerId = null;
 
   function shuffle(arr) {
     for (let i = arr.length - 1; i > 0; i--) {
@@ -458,16 +463,18 @@
   const isCentral = (row, col) =>
     row === CENTER_ROW && col >= CENTER_COL_START && col <= CENTER_COL_END;
   const isCentralIdx = (i) => { const { row, col } = idxToRC(i); return isCentral(row, col); };
+  const wrapMod = (x, m) => ((x % m) + m) % m;
 
   function buildBoard(target) {
+    // All 21 cells are filled — no empty slot. The 5 target letters go in random
+    // positions; the remaining 16 cells get weighted-random filler letters.
     const cells = new Array(TOTAL_CELLS).fill(null);
-    const emptyIdx = Math.floor(Math.random() * TOTAL_CELLS);
-    const available = [];
-    for (let i = 0; i < TOTAL_CELLS; i++) if (i !== emptyIdx) available.push(i);
-    shuffle(available);
-    for (let i = 0; i < 5; i++) cells[available[i]] = target[i];
-    for (let i = 5; i < available.length; i++) cells[available[i]] = weightedLetter();
-    return { cells, emptyIdx };
+    const positions = [];
+    for (let i = 0; i < TOTAL_CELLS; i++) positions.push(i);
+    shuffle(positions);
+    for (let i = 0; i < 5; i++) cells[positions[i]] = target[i];
+    for (let i = 5; i < TOTAL_CELLS; i++) cells[positions[i]] = weightedLetter();
+    return cells;
   }
 
   function isSolved(cells, target) {
@@ -479,12 +486,11 @@
 
   function newGame() {
     const target = WORDS[Math.floor(Math.random() * WORDS.length)];
-    let setup = buildBoard(target);
-    while (isSolved(setup.cells, target)) setup = buildBoard(target);
+    let cells = buildBoard(target);
+    while (isSolved(cells, target)) cells = buildBoard(target);
     state = {
       target,
-      cells: setup.cells,
-      emptyIdx: setup.emptyIdx,
+      cells,
       remaining: TIME_LIMIT,
       ended: false,
     };
@@ -531,10 +537,7 @@
     el.className = 'cell piece';
     el.textContent = letter;
     placeInGrid(el, idx);
-    el.addEventListener('pointerup', (e) => {
-      if (state.ended) return;
-      if (typeof el._idx === 'number') trySlide(el._idx);
-    });
+    attachDragHandlers(el);
     return el;
   }
 
@@ -546,13 +549,7 @@
     frameEl.className = 'central-frame';
     boardEl.appendChild(frameEl);
 
-    emptySlotEl = document.createElement('div');
-    emptySlotEl.className = 'cell empty';
-    placeInGrid(emptySlotEl, state.emptyIdx);
-    boardEl.appendChild(emptySlotEl);
-
     for (let i = 0; i < TOTAL_CELLS; i++) {
-      if (state.cells[i] === null) continue;
       const el = createPieceEl(i, state.cells[i]);
       boardEl.appendChild(el);
       pieceEls[i] = el;
@@ -578,75 +575,136 @@
     }
   }
 
-  // FLIP-style animation: capture each moving piece's current visual rect,
-  // update the grid position immediately, then animate the delta back to zero
-  // with the Web Animations API.
-  function trySlide(idx) {
-    if (state.ended) return;
-    if (idx === state.emptyIdx) return;
-    const { row: sr, col: sc } = idxToRC(idx);
-    const { row: er, col: ec } = idxToRC(state.emptyIdx);
-    if (sr !== er && sc !== ec) return;
+  // ---- Circular slider: drag a row horizontally or a column vertically. ----
+  // During the drag, all pieces in the affected line follow the pointer with
+  // wrap-around: a piece that slides off one side immediately reappears on the
+  // other via wrapMod(). On release we snap to the nearest cell step and shift
+  // the row/column by that many cells.
 
-    // Enumerate which piece moves from where to where.
-    const moves = [];
-    if (sr === er) {
-      const step = ec > sc ? 1 : -1;
-      for (let c = sc; c !== ec; c += step) {
-        moves.push({ from: rcToIdx(sr, c), to: rcToIdx(sr, c + step) });
-      }
-    } else {
-      const step = er > sr ? 1 : -1;
-      for (let r = sr; r !== er; r += step) {
-        moves.push({ from: rcToIdx(r, sc), to: rcToIdx(r + step, sc) });
-      }
-    }
+  function attachDragHandlers(el) {
+    let startX = 0, startY = 0;
+    let axis = null;           // 'x' (row drag) or 'y' (column drag)
+    let lineIdxs = null;       // ordered global indices of the affected row/col
+    let cellStep = 0, lineLen = 0;
 
-    // Capture old rects before any layout change.
-    const movingEls = moves.map(m => pieceEls[m.from]);
+    el.addEventListener('pointerdown', (e) => {
+      if (state.ended) return;
+      if (activePointerId !== null) return;
+      activePointerId = e.pointerId;
+      startX = e.clientX;
+      startY = e.clientY;
+      axis = null;
+      lineIdxs = null;
+      try { el.setPointerCapture(e.pointerId); } catch {}
+    });
+
+    el.addEventListener('pointermove', (e) => {
+      if (e.pointerId !== activePointerId) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+
+      if (axis === null) {
+        if (Math.hypot(dx, dy) < 6) return;
+        axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+        const { row, col } = idxToRC(el._idx);
+        lineIdxs = [];
+        if (axis === 'x') {
+          for (let c = 0; c < COLS; c++) lineIdxs.push(rcToIdx(row, c));
+        } else {
+          for (let r = 0; r < ROWS; r++) lineIdxs.push(rcToIdx(r, col));
+        }
+        // Measure cell step from the two adjacent pieces in the line.
+        const r0 = pieceEls[lineIdxs[0]].getBoundingClientRect();
+        const r1 = pieceEls[lineIdxs[1]].getBoundingClientRect();
+        cellStep = axis === 'x' ? (r1.left - r0.left) : (r1.top - r0.top);
+        lineLen = lineIdxs.length * cellStep;
+      }
+
+      const d = axis === 'x' ? dx : dy;
+      for (let i = 0; i < lineIdxs.length; i++) {
+        const rc = idxToRC(lineIdxs[i]);
+        const basePos = (axis === 'x' ? rc.col : rc.row) * cellStep;
+        const translated = wrapMod(basePos + d, lineLen) - basePos;
+        const pEl = pieceEls[lineIdxs[i]];
+        pEl.style.transition = 'none';
+        pEl.style.transform = axis === 'x'
+          ? `translate3d(${translated}px, 0, 0)`
+          : `translate3d(0, ${translated}px, 0)`;
+      }
+    });
+
+    const finish = (e) => {
+      if (e.pointerId !== activePointerId) return;
+      try { el.releasePointerCapture(e.pointerId); } catch {}
+      activePointerId = null;
+
+      if (axis === null || !lineIdxs) {
+        // Never dragged far enough to lock an axis.
+        axis = null; lineIdxs = null;
+        return;
+      }
+
+      const d = axis === 'x' ? (e.clientX - startX) : (e.clientY - startY);
+      // Round drag distance to a whole number of cell steps. Apply a small
+      // deadzone so a stray micro-drag doesn't count as a shift.
+      const shift = Math.abs(d) < cellStep * 0.2 ? 0 : Math.round(d / cellStep);
+
+      commitShift(lineIdxs, shift);
+      axis = null; lineIdxs = null;
+    };
+
+    el.addEventListener('pointerup', finish);
+    el.addEventListener('pointercancel', finish);
+  }
+
+  function commitShift(lineIdxs, shift) {
+    const n = lineIdxs.length;
+    const s = wrapMod(shift, n);
+
+    // Capture each piece's current visual rect (including any preview transform).
+    const movingEls = lineIdxs.map(idx => pieceEls[idx]);
     const oldRects = movingEls.map(el => el.getBoundingClientRect());
 
-    // Update state.cells to reflect the slide.
-    if (sr === er) {
-      const step = ec > sc ? 1 : -1;
-      for (let c = ec; c !== sc; c -= step) {
-        state.cells[rcToIdx(sr, c)] = state.cells[rcToIdx(sr, c - step)];
-      }
-    } else {
-      const step = er > sr ? 1 : -1;
-      for (let r = er; r !== sr; r -= step) {
-        state.cells[rcToIdx(r, sc)] = state.cells[rcToIdx(r - step, sc)];
-      }
+    // Rotate letters and piece element mapping by `s` within the line.
+    const letters = lineIdxs.map(idx => state.cells[idx]);
+    for (let i = 0; i < n; i++) {
+      const newIdx = lineIdxs[(i + s) % n];
+      state.cells[newIdx] = letters[i];
+      pieceEls[newIdx] = movingEls[i];
     }
-    state.cells[idx] = null;
-    state.emptyIdx = idx;
 
-    // Update pieceEls index mapping and grid positions.
-    const next = pieceEls.slice();
-    for (const m of moves) next[m.from] = null;
-    for (let i = 0; i < moves.length; i++) next[moves[i].to] = movingEls[i];
-    pieceEls = next;
-    for (let i = 0; i < moves.length; i++) placeInGrid(movingEls[i], moves[i].to);
-    placeInGrid(emptySlotEl, state.emptyIdx);
+    // Clear preview transforms and apply the new grid positions.
+    for (let i = 0; i < n; i++) {
+      const pEl = movingEls[i];
+      pEl.style.transition = 'none';
+      pEl.style.transform = '';
+      placeInGrid(pEl, lineIdxs[(i + s) % n]);
+    }
+    // Commit layout before measuring new positions.
+    void boardEl.offsetHeight;
 
-    // Animate each moving piece from its old position to its new one.
-    for (let i = 0; i < movingEls.length; i++) {
-      const el = movingEls[i];
+    // FLIP: animate each piece from its old visual rect to its new grid slot.
+    for (let i = 0; i < n; i++) {
+      const pEl = movingEls[i];
       const oldR = oldRects[i];
-      const newR = el.getBoundingClientRect();
+      const newR = pEl.getBoundingClientRect();
       const dx = oldR.left - newR.left;
       const dy = oldR.top - newR.top;
+      pEl.style.transition = '';
       if (dx || dy) {
-        el.animate(
-          [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }],
-          { duration: SLIDE_MS, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' }
+        pEl.animate(
+          [{ transform: `translate3d(${dx}px, ${dy}px, 0)` },
+           { transform: 'translate3d(0, 0, 0)' }],
+          { duration: SLIDE_MS, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)', fill: 'none' }
         );
       }
     }
 
     applyCentralColors();
 
-    if (isSolved(state.cells, state.target)) winGame();
+    if (s !== 0 && isSolved(state.cells, state.target)) {
+      setTimeout(winGame, SLIDE_MS);
+    }
   }
 
   function startTimer() {
@@ -687,19 +745,9 @@
 
   function loseGame() {
     state.ended = true;
+    // Reveal: overwrite the central row with the target word letters.
     for (let c = CENTER_COL_START; c <= CENTER_COL_END; c++) {
       state.cells[rcToIdx(CENTER_ROW, c)] = state.target[c - CENTER_COL_START];
-    }
-    const { row: er, col: ec } = idxToRC(state.emptyIdx);
-    if (isCentral(er, ec)) {
-      const nonCentral = [];
-      for (let i = 0; i < TOTAL_CELLS; i++) {
-        const { row, col } = idxToRC(i);
-        if (!isCentral(row, col)) nonCentral.push(i);
-      }
-      const newEmpty = nonCentral[Math.floor(Math.random() * nonCentral.length)];
-      state.emptyIdx = newEmpty;
-      state.cells[newEmpty] = null;
     }
     buildBoardDOM();
     setTimeout(showLoseModal, 400);

@@ -16,3 +16,5 @@ Animate pieces moving to new position
 Full screen in mobile landscape
 Allow to put as an app in task bar
 Big letters and modern design. central-panel should have a bouding box insteal of individual pieces bounding box. Cool design.
+
+ok, now the mechanics change. All cells have pieces but you can now choose any piece and move in any direction, the whole row or column of pieces will move like an circular slider, pieces that dissapear from one side appear in the other side
