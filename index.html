@@ -586,6 +586,7 @@
     let axis = null;           // 'x' (row drag) or 'y' (column drag)
     let lineIdxs = null;       // ordered global indices of the affected row/col
     let cellStep = 0, lineLen = 0;
+    let ghosts = [];           // duplicate elements at basePos ± lineLen for seamless wrap
 
     el.addEventListener('pointerdown', (e) => {
       if (state.ended) return;
@@ -595,6 +596,7 @@
       startY = e.clientY;
       axis = null;
       lineIdxs = null;
+      ghosts = [];
       try { el.setPointerCapture(e.pointerId); } catch {}
     });
 
@@ -618,18 +620,41 @@
         const r1 = pieceEls[lineIdxs[1]].getBoundingClientRect();
         cellStep = axis === 'x' ? (r1.left - r0.left) : (r1.top - r0.top);
         lineLen = lineIdxs.length * cellStep;
+
+        // Spawn ghost twins at ±lineLen. As the drag pushes primaries off one
+        // edge, the ghost on the opposite side rides into view — so a piece
+        // visibly disappears off one edge and reappears on the other instead
+        // of teleporting or tweening across the board.
+        for (const idx of lineIdxs) {
+          const piece = pieceEls[idx];
+          const rc = idxToRC(idx);
+          for (const sign of [-1, 1]) {
+            const ghost = piece.cloneNode(true);
+            ghost.classList.add('ghost');
+            ghost.style.pointerEvents = 'none';
+            ghost.style.gridColumn = rc.col + 1;
+            ghost.style.gridRow = rc.row + 1;
+            ghost._baseOffset = sign * lineLen;
+            ghost.style.transition = 'none';
+            ghost.style.transform = axisTransform(axis, ghost._baseOffset);
+            boardEl.appendChild(ghost);
+            ghosts.push(ghost);
+          }
+        }
       }
 
       const d = axis === 'x' ? dx : dy;
-      for (let i = 0; i < lineIdxs.length; i++) {
-        const rc = idxToRC(lineIdxs[i]);
-        const basePos = (axis === 'x' ? rc.col : rc.row) * cellStep;
-        const translated = wrapMod(basePos + d, lineLen) - basePos;
-        const pEl = pieceEls[lineIdxs[i]];
+      // Primary pieces translate linearly — the ones at the leading edge slide
+      // off the board and get clipped by overflow:hidden.
+      for (const idx of lineIdxs) {
+        const pEl = pieceEls[idx];
         pEl.style.transition = 'none';
-        pEl.style.transform = axis === 'x'
-          ? `translate3d(${translated}px, 0, 0)`
-          : `translate3d(0, ${translated}px, 0)`;
+        pEl.style.transform = axisTransform(axis, d);
+      }
+      // Ghosts ride along with the same drag offset; one side is always fully
+      // off-screen while the other is entering the board.
+      for (const ghost of ghosts) {
+        ghost.style.transform = axisTransform(axis, ghost._baseOffset + d);
       }
     });
 
@@ -639,7 +664,10 @@
       activePointerId = null;
 
       if (axis === null || !lineIdxs) {
-        // Never dragged far enough to lock an axis.
+        // Never dragged far enough to lock an axis — just clean up any ghosts
+        // (there shouldn't be any in this branch, but defensively) and bail.
+        for (const g of ghosts) g.remove();
+        ghosts = [];
         axis = null; lineIdxs = null;
         return;
       }
@@ -649,51 +677,56 @@
       // deadzone so a stray micro-drag doesn't count as a shift.
       const shift = Math.abs(d) < cellStep * 0.2 ? 0 : Math.round(d / cellStep);
 
-      commitShift(lineIdxs, shift);
-      axis = null; lineIdxs = null;
+      commitShift(lineIdxs, shift, axis, cellStep, lineLen, d, ghosts);
+      axis = null; lineIdxs = null; ghosts = [];
     };
 
     el.addEventListener('pointerup', finish);
     el.addEventListener('pointercancel', finish);
   }
 
-  function commitShift(lineIdxs, shift) {
+  function commitShift(lineIdxs, shift, axis, cellStep, lineLen, d, ghosts) {
     const n = lineIdxs.length;
     const s = wrapMod(shift, n);
 
-    // Capture each piece's current visual rect (including any preview transform).
-    const movingEls = lineIdxs.map(idx => pieceEls[idx]);
-    const oldRects = movingEls.map(el => el.getBoundingClientRect());
+    // Ghosts have served their purpose — the visible ghost on the leading
+    // edge will be seamlessly "handed off" to a primary via the FLIP below.
+    for (const g of ghosts) g.remove();
 
     // Rotate letters and piece element mapping by `s` within the line.
-    const letters = lineIdxs.map(idx => state.cells[idx]);
+    const movingEls = lineIdxs.map(idx => pieceEls[idx]);
+    const letters   = lineIdxs.map(idx => state.cells[idx]);
     for (let i = 0; i < n; i++) {
       const newIdx = lineIdxs[(i + s) % n];
       state.cells[newIdx] = letters[i];
       pieceEls[newIdx] = movingEls[i];
     }
 
-    // Clear preview transforms and apply the new grid positions.
+    // Apply new grid positions and clear preview transforms.
     for (let i = 0; i < n; i++) {
       const pEl = movingEls[i];
       pEl.style.transition = 'none';
       pEl.style.transform = '';
       placeInGrid(pEl, lineIdxs[(i + s) % n]);
     }
-    // Commit layout before measuring new positions.
     void boardEl.offsetHeight;
 
-    // FLIP: animate each piece from its old visual rect to its new grid slot.
+    // FLIP animate via the *shortest path* around the circular loop. If a
+    // piece wrapped, we animate from just off the entry edge (not from its
+    // far-side visual position), so pieces never traverse the whole board.
     for (let i = 0; i < n; i++) {
       const pEl = movingEls[i];
-      const oldR = oldRects[i];
-      const newR = pEl.getBoundingClientRect();
-      const dx = oldR.left - newR.left;
-      const dy = oldR.top - newR.top;
+      const oldRc = idxToRC(lineIdxs[i]);
+      const newRc = idxToRC(lineIdxs[(i + s) % n]);
+      const basePos    = (axis === 'x' ? oldRc.col : oldRc.row) * cellStep;
+      const newBasePos = (axis === 'x' ? newRc.col : newRc.row) * cellStep;
+      let delta = (basePos + d) - newBasePos;
+      if (delta >  lineLen / 2) delta -= lineLen;
+      if (delta < -lineLen / 2) delta += lineLen;
       pEl.style.transition = '';
-      if (dx || dy) {
+      if (Math.abs(delta) > 0.5) {
         pEl.animate(
-          [{ transform: `translate3d(${dx}px, ${dy}px, 0)` },
+          [{ transform: axisTransform(axis, delta) },
            { transform: 'translate3d(0, 0, 0)' }],
           { duration: SLIDE_MS, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)', fill: 'none' }
         );
@@ -705,6 +738,11 @@
     if (s !== 0 && isSolved(state.cells, state.target)) {
       setTimeout(winGame, SLIDE_MS);
     }
+  }
+
+  // Build a translate3d() string for the given axis / scalar offset.
+  function axisTransform(axis, v) {
+    return axis === 'x' ? `translate3d(${v}px, 0, 0)` : `translate3d(0, ${v}px, 0)`;
   }
 
   function startTimer() {
