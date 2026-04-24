@@ -1,11 +1,10 @@
-HTML Sliding Puzzle Game
+HTML Swap Puzzle Game
 
 The objective is to guess a word of 5 letters.
 The board layout is a grid of 3 rows by 7 colums
 The 5 pieces in the center are surrounded by a highlighting border, showing where the word should be formed. We will call these 5 cells the central-panel.
-Each cell is filled with a piece with a random letter, the letters of the word should be included accordingly.
-One of the pieces is missing to allow sliding movement
-To move pieces to empty space you drag one piece and move it in the direction of the missing pieces. All pieces between the selected and the empty space move in that direction one position.
+Every cell is filled with a letter — there is no empty space. The 5 letters of the target word are seeded somewhere on the board; the rest are weighted random letters.
+Movement is Candy-Crush style: swap one letter with another that is directly adjacent (up, down, left, or right). Tap a piece to select it, then tap an adjacent piece to swap; or drag a piece toward an adjacent neighbor to swap directly.
 When a letter in the central-panel is included in the word but is not in the correct position, it will be shown in yellow.
 When a letter in the central-panel is in the correct position, it will be shown in green.
 When all 5 letters are guessed the game ends with a victory animation.
